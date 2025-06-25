@@ -1,5 +1,31 @@
+From 8e47f85f2a25d765bf277b3710c7e4646eedba54 Mon Sep 17 00:00:00 2001
+From: ShirkNeko <109797057+ShirkNeko@users.noreply.github.com>
+Date: Thu, 26 Jun 2025 03:38:21 +0800
+Subject: [PATCH] 1
+
+---
+ fs/Makefile           |   2 +
+ fs/devpts/inode.c     |  11 ++
+ fs/exec.c             |  11 ++
+ fs/namei.c            | 218 +++++++++++++++++++++++++++++
+ fs/namespace.c        | 310 +++++++++++++++++++++++++++++++++++++++++-
+ fs/notify/fdinfo.c    |  48 +++++++
+ fs/open.c             |  12 ++
+ fs/proc/bootconfig.c  |  11 ++
+ fs/proc/fd.c          |  44 ++++++
+ fs/proc/task_mmu.c    |  16 +++
+ fs/proc_namespace.c   |  25 ++++
+ fs/readdir.c          | 284 +++++++++++++++++++++++++++++++++++++-
+ fs/stat.c             |  41 ++++++
+ fs/statfs.c           |  21 +++
+ include/linux/mount.h |   4 +
+ include/linux/sched.h |   8 ++
+ kernel/kallsyms.c     |  10 ++
+ kernel/sys.c          |   6 +
+ 18 files changed, 1080 insertions(+), 2 deletions(-)
+
 diff --git a/fs/Makefile b/fs/Makefile
-index e4adb9882..2461d8986 100644
+index e4adb988218c..2461d8986ee5 100644
 --- a/fs/Makefile
 +++ b/fs/Makefile
 @@ -18,6 +18,8 @@ obj-y :=	open.o read_write.o file_table.o super.o \
@@ -12,7 +38,7 @@ index e4adb9882..2461d8986 100644
  obj-y +=	buffer.o direct-io.o mpage.o
  else
 diff --git a/fs/devpts/inode.c b/fs/devpts/inode.c
-index 4f25015aa..555e4cb31 100644
+index 4f25015aa534..555e4cb31e65 100644
 --- a/fs/devpts/inode.c
 +++ b/fs/devpts/inode.c
 @@ -596,6 +596,11 @@ struct dentry *devpts_pty_new(struct pts_fs_info *fsi, int index, void *priv)
@@ -41,7 +67,7 @@ index 4f25015aa..555e4cb31 100644
  		return NULL;
  	return dentry->d_fsdata;
 diff --git a/fs/exec.c b/fs/exec.c
-index b1b9db56a..c0761e377 100644
+index b1b9db56a609..c0761e3770c4 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -1891,6 +1891,12 @@ static int bprm_execve(struct linux_binprm *bprm,
@@ -70,17 +96,17 @@ index b1b9db56a..c0761e377 100644
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
  	 * set*uid() to execve() because too many poorly written programs
 diff --git a/fs/namei.c b/fs/namei.c
-index ce97b60fe..3fd836bbd 100644
+index ce97b60fe557..bde4a81cd3a3 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
-@@ -39,10 +39,21 @@
- #include <linux/bitops.h>
+@@ -40,9 +40,23 @@
  #include <linux/init_task.h>
  #include <linux/uaccess.h>
+ 
 +#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)
 +#include <linux/susfs_def.h>
 +#endif
- 
++
  #include "internal.h"
  #include "mount.h"
  
@@ -90,59 +116,58 @@ index ce97b60fe..3fd836bbd 100644
 +extern bool susfs_is_inode_sus_path(struct inode *inode);
 +extern bool susfs_is_base_dentry_android_data_dir(struct dentry* base);
 +extern bool susfs_is_base_dentry_sdcard_dir(struct dentry* base);
++extern const struct qstr susfs_fake_qstr_name;
++extern struct filename *susfs_get_redirected_path(unsigned long ino);
 +#endif
 +
  /* [Feb-1997 T. Schoebel-Theuer]
   * Fundamental changes in the pathname lookup mechanisms (namei)
   * were necessary because of omirr.  The reason is that omirr needs
-@@ -1534,6 +1545,26 @@ static struct dentry *lookup_dcache(const struct qstr *name,
- 	return dentry;
- }
- 
+@@ -1545,18 +1559,66 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,
+ 				    struct dentry *base,
+ 				    unsigned int flags)
+ {
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+static inline int susfs_inode_permission(struct inode *inode, unsigned int flags) {
-+	int error;
-+	int mask = MAY_EXEC;
-+	if (flags & (LOOKUP_CREATE | LOOKUP_EXCL | LOOKUP_RENAME_TARGET)) {
-+		mask |= MAY_WRITE;
-+	}
-+	if (flags & LOOKUP_OPEN) {
-+		mask |= MAY_OPEN;
-+	}
-+	if (flags & LOOKUP_RCU) {
-+		mask |= MAY_NOT_BLOCK;
-+	}
-+	error = inode_permission(i_user_ns(inode), inode, mask);
-+	if (error) {
-+		return error;
-+	}
-+	return -ENOENT;
-+}
++	struct dentry *dentry;
++	bool found_sus_path = false;
++#else
+ 	struct dentry *dentry = lookup_dcache(name, base, flags);
 +#endif
- /*
-  * Parent directory has inode locked exclusive.  This is one
-  * and only case when ->lookup() gets called on non in-lookup
-@@ -1549,8 +1580,27 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,
  	struct dentry *old;
  	struct inode *dir = base->d_inode;
  
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	if (susfs_is_base_dentry_android_data_dir(base) &&
-+		susfs_is_sus_android_data_d_name_found(name->name))
-+	{
-+		if (flags & (LOOKUP_CREATE | LOOKUP_EXCL)) {
-+			return ERR_PTR(-EACCES);
++	if (base && base->d_inode && !found_sus_path) {
++		if (susfs_is_base_dentry_android_data_dir(base) &&
++			susfs_is_sus_android_data_d_name_found(name->name))
++		{
++			if (flags & (LOOKUP_CREATE | LOOKUP_EXCL)) {
++				return ERR_PTR(-EACCES);
++			}
++			dentry = lookup_dcache(&susfs_fake_qstr_name, base, flags);
++			found_sus_path = true;
++			goto retry;
++		} else if (susfs_is_base_dentry_sdcard_dir(base) &&
++				   susfs_is_sus_sdcard_d_name_found(name->name))
++		{
++			dentry = lookup_dcache(&susfs_fake_qstr_name, base, flags);
++			found_sus_path = true;
++			goto retry;
 +		}
-+		return ERR_PTR(susfs_inode_permission(dir, flags));
 +	}
++	dentry = lookup_dcache(name, base, flags);
++retry:
 +#endif
++
  	if (dentry)
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
 +	{
-+	if (!IS_ERR(dentry) && dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {
-+			return ERR_PTR(susfs_inode_permission(dir, flags));
++		if (!found_sus_path && !IS_ERR(dentry) && dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {
++			dentry = lookup_dcache(&susfs_fake_qstr_name, base, flags);
++			found_sus_path = true;
++			goto retry;
 +		}
-+	return dentry;
++		return dentry;
 +	}
 +#else
  		return dentry;
@@ -150,25 +175,151 @@ index ce97b60fe..3fd836bbd 100644
  
  	/* Don't create child dentry for a dead directory. */
  	if (unlikely(IS_DEADDIR(dir)))
-@@ -1565,6 +1615,11 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,
- 		dput(dentry);
- 		dentry = old;
+ 		return ERR_PTR(-ENOENT);
+ 
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++	if (found_sus_path) {
++		dentry = d_alloc(base, &susfs_fake_qstr_name);
++		goto skip_orig_flow;
++	}
++#endif
+ 	dentry = d_alloc(base, name);
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++skip_orig_flow:
++#endif
+ 	if (unlikely(!dentry))
+ 		return ERR_PTR(-ENOMEM);
+ 
+@@ -1575,6 +1637,9 @@ static struct dentry *lookup_fast(struct nameidata *nd,
+ {
+ 	struct dentry *dentry, *parent = nd->path.dentry;
+ 	int status = 1;
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++	unsigned int backup_seq = *seqp;
++#endif
+ 
+ 	/*
+ 	 * Rename seqlock is not required here because in the off chance
+@@ -1583,7 +1648,27 @@ static struct dentry *lookup_fast(struct nameidata *nd,
+ 	 */
+ 	if (nd->flags & LOOKUP_RCU) {
+ 		unsigned seq;
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		if (parent->d_inode && (nd->state & ND_STATE_LOOKUP_LAST || nd->state & ND_STATE_OPEN_LAST)) {
++			if (susfs_is_base_dentry_sdcard_dir(parent) &&
++				susfs_is_sus_sdcard_d_name_found(nd->last.name))
++			{
++				dentry = __d_lookup_rcu(parent, &susfs_fake_qstr_name, &backup_seq);
++				goto skip_orig_flow1;
++			}
++		}
++#endif
+ 		dentry = __d_lookup_rcu(parent, &nd->last, &seq);
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		if (dentry && !IS_ERR(dentry) && dentry->d_inode) {
++			if ((nd->state & ND_STATE_LOOKUP_LAST || nd->state & ND_STATE_OPEN_LAST) &&
++				susfs_is_inode_sus_path(dentry->d_inode))
++			{
++				dentry = __d_lookup_rcu(parent, &susfs_fake_qstr_name, &backup_seq);
++			}
++		}
++skip_orig_flow1:
++#endif
+ 		if (unlikely(!dentry)) {
+ 			if (!try_to_unlazy(nd))
+ 				return ERR_PTR(-ECHILD);
+@@ -1618,7 +1703,27 @@ static struct dentry *lookup_fast(struct nameidata *nd,
+ 			/* we'd been told to redo it in non-rcu mode */
+ 			status = d_revalidate(dentry, nd->flags);
+ 	} else {
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		if (parent->d_inode && (nd->state & ND_STATE_LOOKUP_LAST || nd->state & ND_STATE_OPEN_LAST)) {
++			if (susfs_is_base_dentry_sdcard_dir(parent) &&
++				susfs_is_sus_sdcard_d_name_found(nd->last.name))
++			{
++				dentry = __d_lookup(parent, &susfs_fake_qstr_name);
++				goto skip_orig_flow2;
++			}
++		}
++#endif
+ 		dentry = __d_lookup(parent, &nd->last);
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		if (dentry && !IS_ERR(dentry) && dentry->d_inode) {
++			if ((nd->state & ND_STATE_LOOKUP_LAST || nd->state & ND_STATE_OPEN_LAST) &&
++				susfs_is_inode_sus_path(dentry->d_inode))
++			{
++				dentry = __d_lookup(parent, &susfs_fake_qstr_name);
++			}
++		}
++skip_orig_flow2:
++#endif
+ 		if (unlikely(!dentry))
+ 			return NULL;
+ 		status = d_revalidate(dentry, nd->flags);
+@@ -1640,12 +1745,19 @@ static struct dentry *__lookup_slow(const struct qstr *name,
+ 	struct dentry *dentry, *old;
+ 	struct inode *inode = dir->d_inode;
+ 	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(sus_wq);
++	bool found_sus_path = false;
++#endif
+ 
+ 	/* Don't go there if it's already dead */
+ 	if (unlikely(IS_DEADDIR(inode)))
+ 		return ERR_PTR(-ENOENT);
+ again:
+ 	dentry = d_alloc_parallel(dir, name, &wq);
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++retry:
++#endif
+ 	if (IS_ERR(dentry))
+ 		return dentry;
+ 	if (unlikely(!d_in_lookup(dentry))) {
+@@ -1667,6 +1779,23 @@ static struct dentry *__lookup_slow(const struct qstr *name,
+ 			dentry = old;
+ 		}
  	}
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	if (dentry && !IS_ERR(dentry) && dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {
-+		return ERR_PTR(susfs_inode_permission(dir, flags));
++	if (flags & ND_FLAGS_LOOKUP_LAST && !found_sus_path) {
++		if (susfs_is_base_dentry_sdcard_dir(dir) &&
++			susfs_is_sus_sdcard_d_name_found(name->name))
++		{
++			dentry = d_alloc_parallel(dir, &susfs_fake_qstr_name, &sus_wq);
++			found_sus_path = true;
++			goto retry;
++		} else if (dentry && !IS_ERR(dentry) && dentry->d_inode) {
++			if (susfs_is_inode_sus_path(dentry->d_inode)) {
++				dentry = d_alloc_parallel(dir, &susfs_fake_qstr_name, &sus_wq);
++				found_sus_path = true;
++				goto retry;
++			}
++		}
 +	}
 +#endif
  	return dentry;
  }
- EXPORT_SYMBOL(lookup_one_qstr_excl);
-@@ -2241,10 +2296,23 @@ static int link_path_walk(const char *name, struct nameidata *nd)
+ 
+@@ -1973,6 +2102,11 @@ static const char *walk_component(struct nameidata *nd, int flags)
+ 	if (IS_ERR(dentry))
+ 		return ERR_CAST(dentry);
+ 	if (unlikely(!dentry)) {
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		if (nd->state & ND_STATE_LOOKUP_LAST) {
++			nd->flags |= ND_FLAGS_LOOKUP_LAST;
++		}
++#endif
+ 		dentry = lookup_slow(&nd->last, nd->path.dentry, nd->flags);
+ 		if (IS_ERR(dentry))
+ 			return ERR_CAST(dentry);
+@@ -2240,11 +2374,21 @@ static int link_path_walk(const char *name, struct nameidata *nd)
+ 		const char *link;
  		u64 hash_len;
  		int type;
- 
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
 +		struct dentry *dentry;
 +#endif
+ 
  		mnt_userns = mnt_user_ns(nd->path.mnt);
  		err = may_lookup(mnt_userns, nd);
  		if (err)
@@ -176,238 +327,103 @@ index ce97b60fe..3fd836bbd 100644
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
 +		dentry = nd->path.dentry;
 +		if (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {
-+			err = susfs_inode_permission(dentry->d_parent->d_inode, nd->flags);
-+			if (err) {
-+				return err;
-+			}
++			// return -ENOENT here since it is walking the sub path of sus path
 +			return -ENOENT;
 +		}
 +#endif
  
  		hash_len = hash_name(nd->path.dentry, name);
  
-@@ -2270,6 +2338,40 @@ static int link_path_walk(const char *name, struct nameidata *nd)
+@@ -2270,6 +2414,19 @@ static int link_path_walk(const char *name, struct nameidata *nd)
  				hash_len = this.hash_len;
  				name = this.name;
  			}
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++			if (nd->state & ND_STATE_LAST_SDCARD_SUS_PATH) {
++				// return -ENOENT here since it is walking the sub path of sus sdcard path
++				return -ENOENT;
++			}
 +			if (parent->d_inode) {
 +				if (susfs_is_base_dentry_sdcard_dir(parent) &&
 +					susfs_is_sus_sdcard_d_name_found(name))
 +				{
-+					if (nd->state & ND_STATE_RENAMEAT) {
-+						do {
-+							name++;
-+						} while (likely(*name != '/') && *name != '\0');
-+						while (*name=='/')
-+							name++;
-+						if (!*name) {
-+							return -EPERM;
-+						}
-+						return -ENOENT;
-+					} else if (nd->state & ND_STATE_FILENAME_CREATE) {
-+						if (nd->last.name[nd->last.len] && !(nd->flags & LOOKUP_DIRECTORY)) {
-+							return -ENOENT;
-+						} else {
-+							do {
-+								name++;
-+							} while (likely(*name != '/') && *name != '\0');
-+							while (*name=='/')
-+								name++;
-+							if (!*name) {
-+								return -EACCES;
-+							}
-+							return -ENOENT;
-+						}
-+					}
-+					return -ENOENT;
++					nd->state |= ND_STATE_LAST_SDCARD_SUS_PATH;
 +				}
 +			}
 +#endif
  		}
  
  		nd->last.hash_len = hash_len;
-@@ -2444,6 +2546,9 @@ static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path
+@@ -2427,6 +2584,9 @@ static inline const char *lookup_last(struct nameidata *nd)
  {
- 	const char *s = path_init(nd, flags);
- 	int err;
+ 	if (nd->last_type == LAST_NORM && nd->last.name[nd->last.len])
+ 		nd->flags |= LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	struct dentry *dentry;
++	nd->state |= ND_STATE_LOOKUP_LAST;
 +#endif
  
- 	if (unlikely(flags & LOOKUP_DOWN) && !IS_ERR(s)) {
- 		err = handle_lookup_down(nd);
-@@ -2454,6 +2559,18 @@ static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path
- 	while (!(err = link_path_walk(s, nd)) &&
- 	       (s = lookup_last(nd)) != NULL)
- 		;
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	dentry = nd->path.dentry;
-+	if (!err && dentry && !IS_ERR(dentry) && dentry->d_inode) {
-+		if (susfs_is_inode_sus_path(dentry->d_inode)) {
-+			err = susfs_inode_permission(dentry->d_parent->d_inode, nd->flags);
-+			if (!err) {
-+				err = -ENOENT;
-+			}
-+			goto orig_flow;
-+		}
-+	}
-+#endif
- 	if (!err && unlikely(nd->flags & LOOKUP_MOUNTPOINT)) {
- 		err = handle_lookup_down(nd);
- 		nd->state &= ~ND_JUMPED; // no d_weak_revalidate(), please...
-@@ -2469,6 +2586,9 @@ static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path
- 		nd->path.mnt = NULL;
- 		nd->path.dentry = NULL;
- 	}
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+orig_flow:
-+#endif
- 	terminate_walk(nd);
- 	return err;
+ 	return walk_component(nd, WALK_TRAILING);
  }
-@@ -2500,6 +2620,18 @@ static int path_parentat(struct nameidata *nd, unsigned flags,
- {
- 	const char *s = path_init(nd, flags);
- 	int err = link_path_walk(s, nd);
+@@ -3376,15 +3536,48 @@ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
+ 	int error, create_error = 0;
+ 	umode_t mode = op->mode;
+ 	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	struct dentry *dentry = nd->path.dentry;
-+	if (!err && dentry && !IS_ERR(dentry) && dentry->d_inode) {
-+		if (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {
-+			err = susfs_inode_permission(dentry->d_parent->d_inode, nd->flags);
-+			if (!err) {
-+				err = -ENOENT;
-+			}
-+			goto orig_flow;
-+		}
-+	}
++	bool found_sus_path = false;
 +#endif
- 	if (!err)
- 		err = complete_walk(nd);
- 	if (!err) {
-@@ -2507,6 +2639,9 @@ static int path_parentat(struct nameidata *nd, unsigned flags,
- 		nd->path.mnt = NULL;
- 		nd->path.dentry = NULL;
- 	}
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+orig_flow:
-+#endif
- 	terminate_walk(nd);
- 	return err;
- }
-@@ -2523,6 +2658,14 @@ static int __filename_parentat(int dfd, struct filename *name,
- 	if (IS_ERR(name))
- 		return PTR_ERR(name);
- 	set_nameidata(&nd, dfd, name, root);
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	if (flags & LOOKUP_FILENAME_CREATE) {
-+		nd.state |= ND_STATE_FILENAME_CREATE;
-+	}
-+	if (flags & LOOKUP_RENAMEAT) {
-+		nd.state |= ND_STATE_RENAMEAT;
-+	}
-+#endif
- 	retval = path_parentat(&nd, flags | LOOKUP_RCU, parent);
- 	if (unlikely(retval == -ECHILD))
- 		retval = path_parentat(&nd, flags, parent);
-@@ -3401,6 +3544,15 @@ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
- 		dentry = NULL;
- 	}
- 	if (dentry->d_inode) {
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+		if (susfs_is_inode_sus_path(dentry->d_inode)) {
-+			error = susfs_inode_permission(dir_inode, nd->flags);
-+			if (error) {
-+				return ERR_PTR(error);
-+			}
-+			return ERR_PTR(-ENOENT);
-+		}
-+#endif
- 		/* Cached positive dentry: will open in f_op->open */
- 		return dentry;
- 	}
-@@ -3433,6 +3585,17 @@ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
- 		dentry = atomic_open(nd, dentry, file, open_flag, mode);
- 		if (unlikely(create_error) && dentry == ERR_PTR(-ENOENT))
- 			dentry = ERR_PTR(create_error);
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+		if (dentry && !IS_ERR(dentry) && dentry->d_inode) {
-+			if (susfs_is_inode_sus_path(dentry->d_inode)) {
-+				error = susfs_inode_permission(dir_inode, nd->flags);
-+				if (error) {
-+					return ERR_PTR(error);
-+				}
-+			return ERR_PTR(-ENOENT);
-+			}
-+		}
-+#endif
- 		return dentry;
- 	}
  
-@@ -3447,6 +3610,17 @@ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
- 			}
- 			dput(dentry);
- 			dentry = res;
+ 	if (unlikely(IS_DEADDIR(dir_inode)))
+ 		return ERR_PTR(-ENOENT);
+ 
+ 	file->f_mode &= ~FMODE_CREATED;
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+			if (dentry && !IS_ERR(dentry) && dentry->d_inode) {
-+				if (susfs_is_inode_sus_path(dentry->d_inode)) {
-+					error = susfs_inode_permission(dir_inode, nd->flags);
-+					if (error) {
-+						return ERR_PTR(error);
-+					}
-+				return ERR_PTR(-ENOENT);
-+				}
++	if (nd->state & ND_STATE_OPEN_LAST) {
++		if (susfs_is_base_dentry_sdcard_dir(dir) &&
++			susfs_is_sus_sdcard_d_name_found(nd->last.name))
++		{
++			dentry = d_lookup(dir, &susfs_fake_qstr_name);
++			found_sus_path = true;
++			goto skip_orig_flow1;
++		}
++	}
++#endif
+ 	dentry = d_lookup(dir, &nd->last);
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++	if (dentry && !IS_ERR(dentry) && dentry->d_inode) {
++		if (nd->state & ND_STATE_OPEN_LAST && susfs_is_inode_sus_path(dentry->d_inode))
++		{
++			dentry = d_lookup(dir, &susfs_fake_qstr_name);
++			found_sus_path = true;
++		}
++	}
++skip_orig_flow1:
++#endif
+ 	for (;;) {
+ 		if (!dentry) {
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++			if (found_sus_path) {
++				dentry = d_alloc_parallel(dir, &susfs_fake_qstr_name, &wq);
++				goto skip_orig_flow2;
 +			}
 +#endif
+ 			dentry = d_alloc_parallel(dir, &nd->last, &wq);
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++skip_orig_flow2:
++#endif
+ 			if (IS_ERR(dentry))
+ 				return dentry;
  		}
- 	}
- 
-@@ -3494,6 +3668,17 @@ static const char *open_last_lookups(struct nameidata *nd,
- 		return handle_dots(nd, nd->last_type);
- 	}
- 
+@@ -3485,6 +3678,9 @@ static const char *open_last_lookups(struct nameidata *nd,
+ 	struct inode *inode;
+ 	struct dentry *dentry;
+ 	const char *res;
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	if (dir->d_inode) {
-+		if (susfs_is_inode_sus_path(dir->d_inode)) {
-+			int err = susfs_inode_permission(dir->d_parent->d_inode, nd->flags);
-+			if (err) {
-+				return ERR_CAST(ERR_PTR(err));
-+			}
-+			return ERR_CAST(ERR_PTR(-ENOENT));
-+		}
-+	}
++	nd->state |= ND_STATE_OPEN_LAST;
 +#endif
- 	if (!(open_flag & O_CREAT)) {
- 		if (nd->last.name[nd->last.len])
- 			nd->flags |= LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
-@@ -3501,6 +3686,17 @@ static const char *open_last_lookups(struct nameidata *nd,
- 		dentry = lookup_fast(nd, &inode, &seq);
- 		if (IS_ERR(dentry))
- 			return ERR_CAST(dentry);
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+		if (dentry && dentry->d_inode) {
-+			if (susfs_is_inode_sus_path(dentry->d_inode)) {
-+				int err = susfs_inode_permission(dir->d_inode, nd->flags);
-+				if (err) {
-+					return ERR_CAST(ERR_PTR(err));
-+				}
-+				return ERR_CAST(ERR_PTR(-ENOENT));
-+			}
-+		}
-+#endif
- 		if (likely(dentry))
- 			goto finish_lookup;
  
-@@ -3758,12 +3954,18 @@ static struct file *path_openat(struct nameidata *nd,
- 	return ERR_PTR(error);
- }
+ 	nd->flags |= op->intent;
  
-+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-+extern struct filename* susfs_get_redirected_path(unsigned long ino);
-+#endif
- struct file *do_filp_open(int dfd, struct filename *pathname,
- 		const struct open_flags *op)
- {
+@@ -3764,6 +3960,9 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
  	struct nameidata nd;
  	int flags = op->lookup_flags;
  	struct file *filp;
@@ -417,7 +433,7 @@ index ce97b60fe..3fd836bbd 100644
  
  	set_nameidata(&nd, dfd, pathname, NULL);
  	filp = path_openat(&nd, op, flags | LOOKUP_RCU);
-@@ -3771,6 +3973,25 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
+@@ -3771,6 +3970,25 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
  		filp = path_openat(&nd, op, flags);
  	if (unlikely(filp == ERR_PTR(-ESTALE)))
  		filp = path_openat(&nd, op, flags | LOOKUP_REVAL);
@@ -443,29 +459,8 @@ index ce97b60fe..3fd836bbd 100644
  	restore_nameidata();
  	return filp;
  }
-@@ -3812,6 +4033,9 @@ static struct dentry *filename_create(int dfd, struct filename *name,
- 	int type;
- 	int err2;
- 	int error;
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	reval_flag |= LOOKUP_FILENAME_CREATE;
-+#endif
- 
- 	error = filename_parentat(dfd, name, reval_flag, path, &last, &type);
- 	if (error)
-@@ -4898,6 +5122,10 @@ int do_renameat2(int olddfd, struct filename *from, int newdfd,
- 	if (error)
- 		goto put_names;
- 
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+	lookup_flags |= LOOKUP_RENAMEAT;
-+#endif
-+
- 	error = filename_parentat(newdfd, to, lookup_flags, &new_path, &new_last,
- 				  &new_type);
- 	if (error)
 diff --git a/fs/namespace.c b/fs/namespace.c
-index 94db89c16..2ab3da358 100644
+index 94db89c16b79..2ab3da358ff0 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
 @@ -32,10 +32,36 @@
@@ -934,7 +929,7 @@ index 94db89c16..2ab3da358 100644
 +}
 +#endif
 diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c
-index 3451708fd..e78db64db 100644
+index 3451708fd035..e78db64dbc57 100644
 --- a/fs/notify/fdinfo.c
 +++ b/fs/notify/fdinfo.c
 @@ -12,6 +12,9 @@
@@ -1025,7 +1020,7 @@ index 3451708fd..e78db64db 100644
  			   inode_mark->wd, inode->i_ino, inode->i_sb->s_dev,
  			   inotify_mark_user_mask(mark));
 diff --git a/fs/open.c b/fs/open.c
-index 39779f1ba..a45bc43ed 100644
+index 39779f1ba4e1..a45bc43ed9f4 100644
 --- a/fs/open.c
 +++ b/fs/open.c
 @@ -394,6 +394,12 @@ static const struct cred *access_override_creds(void)
@@ -1055,7 +1050,7 @@ index 39779f1ba..a45bc43ed 100644
  		return -EINVAL;
  
 diff --git a/fs/proc/bootconfig.c b/fs/proc/bootconfig.c
-index 2e244ada1..792e1cb04 100644
+index 2e244ada1f97..792e1cb04b11 100644
 --- a/fs/proc/bootconfig.c
 +++ b/fs/proc/bootconfig.c
 @@ -12,8 +12,19 @@
@@ -1079,7 +1074,7 @@ index 2e244ada1..792e1cb04 100644
  		seq_puts(m, saved_boot_config);
  	return 0;
 diff --git a/fs/proc/fd.c b/fs/proc/fd.c
-index 913bef0d2..ebf8d1b06 100644
+index 913bef0d2a36..ebf8d1b0617c 100644
 --- a/fs/proc/fd.c
 +++ b/fs/proc/fd.c
 @@ -13,6 +13,9 @@
@@ -1152,7 +1147,7 @@ index 913bef0d2..ebf8d1b06 100644
  	/* show_fd_locks() never deferences files so a stale value is safe */
  	show_fd_locks(m, file, files);
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index d56513a56..13d8c0df8 100644
+index d56513a56bae..13d8c0df8fb1 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -21,6 +21,9 @@
@@ -1195,7 +1190,7 @@ index d56513a56..13d8c0df8 100644
  	}
  
 diff --git a/fs/proc_namespace.c b/fs/proc_namespace.c
-index 49650e54d..9518e9f53 100644
+index 49650e54d2f8..9518e9f53694 100644
 --- a/fs/proc_namespace.c
 +++ b/fs/proc_namespace.c
 @@ -12,12 +12,20 @@
@@ -1258,7 +1253,7 @@ index 49650e54d..9518e9f53 100644
  	if (sb->s_op->show_devname) {
  		seq_puts(m, "device ");
 diff --git a/fs/readdir.c b/fs/readdir.c
-index 09e8ed7d4..a49d0642b 100644
+index 09e8ed7d4161..a49d0642bd81 100644
 --- a/fs/readdir.c
 +++ b/fs/readdir.c
 @@ -24,6 +24,15 @@
@@ -1715,7 +1710,7 @@ index 09e8ed7d4..a49d0642b 100644
  	if (error >= 0)
  		error = buf.error;
 diff --git a/fs/stat.c b/fs/stat.c
-index 357a1db41..638320389 100644
+index 357a1db410ec..6383203890fc 100644
 --- a/fs/stat.c
 +++ b/fs/stat.c
 @@ -17,6 +17,9 @@
@@ -1802,7 +1797,7 @@ index 357a1db41..638320389 100644
  	if (path.mnt->mnt_root == path.dentry)
  		stat->attributes |= STATX_ATTR_MOUNT_ROOT;
 diff --git a/fs/statfs.c b/fs/statfs.c
-index 2a37f9f3d..11247fa29 100644
+index 2a37f9f3dba1..11247fa2924f 100644
 --- a/fs/statfs.c
 +++ b/fs/statfs.c
 @@ -9,6 +9,10 @@
@@ -1853,7 +1848,7 @@ index 2a37f9f3d..11247fa29 100644
  	drop_super(s);
  	return err;
 diff --git a/include/linux/mount.h b/include/linux/mount.h
-index 9fc799307..0da7c62eb 100644
+index 9fc79930799e..0da7c62eb846 100644
 --- a/include/linux/mount.h
 +++ b/include/linux/mount.h
 @@ -78,7 +78,11 @@ struct vfsmount {
@@ -1869,7 +1864,7 @@ index 9fc799307..0da7c62eb 100644
  
  static inline struct user_namespace *mnt_user_ns(const struct vfsmount *mnt)
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 9c315023a..023c2899a 100644
+index 9c315023a2f8..023c2899a677 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -1514,8 +1514,16 @@ struct task_struct {
@@ -1890,7 +1885,7 @@ index 9c315023a..023c2899a 100644
  	/*
  	 * New fields for task_struct should be added above here, so that
 diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
-index e0d9f77cf..e2d41cc3d 100644
+index e0d9f77cf2d4..e2d41cc3d3ad 100644
 --- a/kernel/kallsyms.c
 +++ b/kernel/kallsyms.c
 @@ -761,8 +761,18 @@ static int s_show(struct seq_file *m, void *p)
@@ -1913,7 +1908,7 @@ index e0d9f77cf..e2d41cc3d 100644
  }
  
 diff --git a/kernel/sys.c b/kernel/sys.c
-index 0e7609307..e239a4f83 100644
+index 0e76093073c7..e239a4f83e6e 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -1291,12 +1291,18 @@ static int override_release(char __user *release, size_t len)
@@ -1935,3 +1930,6 @@ index 0e7609307..e239a4f83 100644
  	up_read(&uts_sem);
  	if (copy_to_user(name, &tmp, sizeof(tmp)))
  		return -EFAULT;
+-- 
+2.34.1
+
